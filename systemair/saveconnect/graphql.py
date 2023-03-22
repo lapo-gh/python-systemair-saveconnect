@@ -186,31 +186,28 @@ class SaveConnectGraphQL:
 
         return all(statuses)
 
-    async def post_request(self, url, data, headers, retry=False):
+        async def post_request(self, query: str, variables: dict = None) -> dict:
+            json_payload = {
+            "query": query,
+            "variables": variables,
+        }
 
-        try:
-            response = await self._http.post(
-                url=url,
-                json=data,
-                headers=headers
-            )
+        async with self.session.post(self._url, json=json_payload) as response:
+            try:
+                response.raise_for_status()
+            except aiohttp.ClientResponseError as e:
+                _logger.warning(f"Request failed with status {response.status}: {response.text}")
+                raise e
 
-        except TimeoutError as e:
-            _LOGGER.warning(f"Got timeout error when reading API. Error: {e}")
-            return None
-        except httpx.ConnectError as e:
-            _LOGGER.warning(f"Failed to connect to the API. Error: {e}")
-            return None
+            response_json = await response.json()
 
-        try:
-            response_data = response.json()["data"]
-            return response_data
-        except JSONDecodeError as e:
+            if "errors" in response_json:
+                _logger.warning(f"GraphQL errors: {response_json['errors']}")
+                raise GraphQLException(response_json["errors"])
 
-            if not retry and "UnauthorizedError" in response.text:
-                _LOGGER.warning("Response indicates token expiry. Refreshing token and retry")
-                await self.api.refresh_token()
-                return await self.post_request(url, data, headers, retry=True)
+            if "data" not in response_json:
+                _logger.warning(f"Missing 'data' key in response: {response_json}")
+                return {}
 
-            _LOGGER.warning(f"Could not parse JSON. Content: {response.content}")
-            raise e
+            return response_json["data"]
+
